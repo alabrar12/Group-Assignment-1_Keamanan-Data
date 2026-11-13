@@ -21,6 +21,9 @@ func (rg *RoleGuard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	} else {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	http.Error(w, "Forbidden", http.StatusForbidden)
