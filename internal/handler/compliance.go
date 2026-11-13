@@ -13,24 +13,29 @@ import (
 )
 
 func GetMyData(w http.ResponseWriter, r *http.Request) {
-	user, _ := lmodel.UserFromContext(r.Context())
-
-	//TODO
-	profile, err := db.GetUserByID(r.Context(), user.ID)
-
-	//TODO
+	user, err := lmodel.UserFromContext(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to fetch personal data", http.StatusInternalServerError)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
+	profile, err := db.GetUserByID(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "Failed to fetch user data", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(profile)
 }
 
 func UpdateMyData(w http.ResponseWriter, r *http.Request) {
-	user, _ := lmodel.UserFromContext(r.Context())
+	user, err := lmodel.UserFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	// TODO
 	var req struct {
 		Username string `json:"username"`
 	}
@@ -46,7 +51,6 @@ func UpdateMyData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//TODO
 	if err := db.UpdateMyData(r.Context(), user.ID, req.Username); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -57,6 +61,7 @@ func UpdateMyData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"message":  "Data updated successfully",
 		"username": req.Username,
@@ -64,12 +69,13 @@ func UpdateMyData(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetMyAuditLog(w http.ResponseWriter, r *http.Request) {
-	user, _ := lmodel.UserFromContext(r.Context())
+	user, err := lmodel.UserFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	// TODO
 	logs, err := db.GetUserAuditLogs(r.Context(), user.ID)
-
-	// TODO
 	if err != nil {
 		http.Error(w, "Failed to fetch audit logs", http.StatusInternalServerError)
 		return
@@ -79,6 +85,7 @@ func GetMyAuditLog(w http.ResponseWriter, r *http.Request) {
 		logs = []lmodel.AuditLog{}
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"user":  user.Username,
 		"total": len(logs),
@@ -87,12 +94,15 @@ func GetMyAuditLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func ExportMyData(w http.ResponseWriter, r *http.Request) {
-	user, _ := lmodel.UserFromContext(r.Context())
+	user, err := lmodel.UserFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	// TODO
 	profile, err := db.GetUserByID(r.Context(), user.ID)
 	if err != nil {
-		http.Error(w, "Failed to fetch personal data", http.StatusInternalServerError)
+		http.Error(w, "Failed to fetch user data", http.StatusInternalServerError)
 		return
 	}
 
@@ -105,7 +115,16 @@ func ExportMyData(w http.ResponseWriter, r *http.Request) {
 		projects = []lmodel.Project{}
 	}
 
-	// TODO
+	grades := make([]lmodel.Grade, 0)
+	for _, project := range projects {
+		projectGrades, err := db.GetGradesForProject(r.Context(), project.ID)
+		if err != nil {
+			http.Error(w, "Failed to fetch project grades", http.StatusInternalServerError)
+			return
+		}
+		grades = append(grades, projectGrades...)
+	}
+
 	logs, err := db.GetUserAuditLogs(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, "Failed to fetch audit log", http.StatusInternalServerError)
@@ -115,25 +134,52 @@ func ExportMyData(w http.ResponseWriter, r *http.Request) {
 		logs = []lmodel.AuditLog{}
 	}
 
-	export := map[string]interface{}{
-		"exported_at": time.Now(),
-		"profile":     profile,
-		"projects":    projects,
-		"audit_logs":  logs,
+	export := lmodel.DataExport{
+		User:       *profile,
+		Projects:   projects,
+		Grades:     grades,
+		AuditLog:   logs,
+		ExportedAt: time.Now(),
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename=my_data_export.json")
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(export)
 }
 func DeleteMyAccount(w http.ResponseWriter, r *http.Request) {
-	user, _ := lmodel.UserFromContext(r.Context())
+	user, err := lmodel.UserFromContext(r.Context())
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	// TODO
-	if err := db.DeleteUserAccount(r.Context(), user.ID); err != nil {
+	tx, err := db.Pool.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to delete account", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if _, err := tx.Exec(r.Context(), `DELETE FROM audit_logs WHERE user_id = $1`, user.ID); err != nil {
 		http.Error(w, "Failed to delete account", http.StatusInternalServerError)
 		return
 	}
 
+	result, err := tx.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, user.ID)
+	if err != nil {
+		http.Error(w, "Failed to delete account", http.StatusInternalServerError)
+		return
+	}
+	if result.RowsAffected() == 0 {
+		http.Error(w, "Account not found", http.StatusNotFound)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "Failed to delete account", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Your account and all data have been permanently deleted",
 	})
