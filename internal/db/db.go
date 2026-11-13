@@ -65,7 +65,7 @@ func CreateProject(ctx context.Context, title string, description string, studen
 
 func GetProjectByID(ctx context.Context, id int) (*lmodel.Project, error) {
 	p := &lmodel.Project{}
-	query := `SELECT id, title, description, student_id FROM projects WHERE project_id = $1`
+	query := `SELECT id, title, description, student_id FROM projects WHERE id = $1`
 	err := Pool.QueryRow(ctx, query, id).Scan(&p.ID, &p.Title, &p.Description, &p.StudentID)
 	if err != nil {
 		return nil, err
