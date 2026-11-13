@@ -84,9 +84,14 @@ func GetAllProjectGrades(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(projectGrades)
 }
 func GradeProject(w http.ResponseWriter, r *http.Request) {
-	userCtx, err := lmodel.UserFromContext(r.Context())
-	projectID, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
+	userCtx, contextErr := lmodel.UserFromContext(r.Context())
+	if contextErr != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	projectID, idErr := strconv.Atoi(r.PathValue("id"))
+	if idErr != nil || projectID <= 0 {
 		http.Error(w, "Invalid project id", http.StatusBadRequest)
 		return
 	}
